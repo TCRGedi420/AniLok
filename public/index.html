@@ -1222,12 +1222,13 @@
 // CONFIG
 // ─────────────────────────────────────────────
 // ─── PROXY SETUP ──────────────────────────────────────────────────────────
-// On Vercel:  /proxy/* is handled by api/proxy.js (same origin = no CORS).
-// Locally:    falls back to corsproxy.io automatically.
+// After deploying anilok-proxy to Vercel, paste your URL here.
+// Example: 'https://anilok-proxy-xyz.vercel.app/proxy'
+// Leave as '' to auto-fallback to corsproxy.io.
+const OWN_PROXY  = '';
+
 const UPSTREAM   = 'https://animelokam.vercel.app/api/v2/hianime';
-const ON_VERCEL  = window.location.hostname !== 'localhost'
-                   && window.location.protocol !== 'file:';
-const API_BASE   = ON_VERCEL ? '/proxy' : UPSTREAM;
+const API_BASE   = OWN_PROXY || UPSTREAM;
 const CORS_PROXY = 'https://corsproxy.io/?url=';
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -1268,28 +1269,30 @@ let searchTimeout = null;
 // API
 // ─────────────────────────────────────────────
 async function api(path, retries = 2) {
-  // On Vercel: /proxy/* is same-origin — no CORS issues ever.
-  // Locally (file:// or localhost): try direct first, then fall back to corsproxy.io.
+  // If OWN_PROXY is set, all calls already go there — no third-party fallback needed.
+  // Otherwise: first attempt direct, then switch to corsproxy.io on any CORS/network error.
   const directUrl = `${API_BASE}${path}`;
-  const proxyUrl  = `${CORS_PROXY}${encodeURIComponent(`${UPSTREAM}${path}`)}`;
+  const proxyUrl  = OWN_PROXY
+    ? directUrl  // OWN_PROXY already baked into API_BASE
+    : `${CORS_PROXY}${encodeURIComponent(`${UPSTREAM}${path}`)}`;
 
   for (let i = 0; i <= retries; i++) {
-    const useProxy = ON_VERCEL ? false : (i > 0 || window._useCorsProxy);
+    const useProxy = OWN_PROXY ? false : (i > 0 || window._useCorsProxy);
     const url = useProxy ? proxyUrl : directUrl;
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), 12000);
       const res = await fetch(url, {
         headers: { 'Accept': 'application/json' },
-        signal: controller.signal,
+        signal: controller.signal
       });
       clearTimeout(timer);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
-      if (!ON_VERCEL && !useProxy) window._useCorsProxy = false;
+      if (!useProxy) window._useCorsProxy = false;
       return json;
     } catch (e) {
-      if (!ON_VERCEL && !useProxy) window._useCorsProxy = true;
+      if (!useProxy && !OWN_PROXY) window._useCorsProxy = true;
       if (i === retries) throw e;
       await new Promise(r => setTimeout(r, 600 * (i + 1)));
     }
@@ -1643,14 +1646,16 @@ async function loadEpisode(epId, epNum) {
 }
 
 function renderServers(servers) {
-  const subServers = servers.sub || [];
-  const dubServers = servers.dub || [];
+  const root       = servers.data || servers;
+  const subServers = root.sub || [];
+  const dubServers = root.dub || [];
 
-  // Enable/disable version buttons
-  document.getElementById('btn-sub').disabled = !subServers.length;
-  document.getElementById('btn-dub').disabled = !dubServers.length;
+  const btnSub = document.getElementById('btn-sub');
+  const btnDub = document.getElementById('btn-dub');
+  btnSub.disabled = !subServers.length;
+  btnDub.disabled = !dubServers.length;
 
-  if (currentVersion === 'dub' && !dubServers.length) setVersion('sub');
+  if (currentVersion === 'dub' && !dubServers.length && subServers.length) setVersion('sub');
   if (currentVersion === 'sub' && !subServers.length && dubServers.length) setVersion('dub');
 
   renderServerButtons(currentVersion === 'sub' ? subServers : dubServers);
@@ -1658,23 +1663,22 @@ function renderServers(servers) {
 
 function renderServerButtons(srvList) {
   const container = document.getElementById('server-btns');
-  if (!srvList.length) {
+  if (!srvList || !srvList.length) {
     container.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted);padding:4px 8px">No servers</span>';
     showPlayerError('No servers available for this version.');
     return;
   }
-  container.innerHTML = srvList.map((s, i) => `
-    <button class="ctrl-btn ${i===0?'active':''}" 
-      onclick="selectServer('${s.serverId}', '${escHtml(s.serverName)}', this)"
-      data-serverid="${s.serverId}">${escHtml(s.serverName)}</button>`).join('');
+  container.innerHTML = srvList.map((s, i) => `<button class="ctrl-btn ${i===0?'active':''}"
+    onclick="selectServer('${s.serverId}','${escHtml(s.serverName)}',this)"
+    data-serverid="${s.serverId}">${escHtml(s.serverName)}</button>`).join('');
 
-  // Auto-load first server
-  selectServer(srvList[0].serverId, srvList[0].serverName, container.firstChild);
+  const firstBtn = container.querySelector('button');
+  selectServer(srvList[0].serverId, srvList[0].serverName, firstBtn);
 }
 
 async function selectServer(serverId, serverName, btn) {
   document.querySelectorAll('#server-btns .ctrl-btn').forEach(b => b.classList.remove('active'));
-  if (btn) btn.classList.add('active');
+  if (btn && typeof btn === 'object' && btn.classList) btn.classList.add('active');
   currentServer = serverId;
 
   document.getElementById('player-loading').style.display = 'flex';
