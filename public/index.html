@@ -1269,32 +1269,33 @@ let searchTimeout = null;
 // API
 // ─────────────────────────────────────────────
 async function api(path, retries = 2) {
-  // If OWN_PROXY is set, all calls already go there — no third-party fallback needed.
-  // Otherwise: first attempt direct, then switch to corsproxy.io on any CORS/network error.
-  const directUrl = `${API_BASE}${path}`;
-  const proxyUrl  = OWN_PROXY
-    ? directUrl  // OWN_PROXY already baked into API_BASE
-    : `${CORS_PROXY}${encodeURIComponent(`${UPSTREAM}${path}`)}`;
+  const directUrl       = `${API_BASE}${path}`;
+  const corsFallbackUrl = `${CORS_PROXY}${encodeURIComponent(`${UPSTREAM}${path}`)}`;
 
+  let lastError;
   for (let i = 0; i <= retries; i++) {
-    const useProxy = OWN_PROXY ? false : (i > 0 || window._useCorsProxy);
-    const url = useProxy ? proxyUrl : directUrl;
+    const useCorsFallback = !USE_OWN_PROXY && (i > 0 || window._useCorsProxy);
+    const url = useCorsFallback ? corsFallbackUrl : directUrl;
     try {
-      // ✅ REPLACE WITH THIS
-      const fetchPromise   = fetch(url, { headers: { 'Accept': 'application/json' } });
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Request timed out after 15s')), 15000));
-      const res = await Promise.race([fetchPromise, timeoutPromise]);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const json = await res.json();
-      if (!useProxy) window._useCorsProxy = false;
+      const res  = await fetch(url, { headers: { 'Accept': 'application/json' } });
+      const text = await res.text();
+      console.log(`[AniLok] ${res.status} ${url.split('?')[0]} — ${text.slice(0,120)}`);
+
+      if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.slice(0,200)}`);
+      if (text.trimStart().startsWith('<'))
+        throw new Error(`Proxy returned HTML (${res.status}) — check vercel.json /proxy route`);
+
+      const json = JSON.parse(text);
+      if (!USE_OWN_PROXY) window._useCorsProxy = false;
       return json;
+
     } catch (e) {
-      if (!useProxy && !OWN_PROXY) window._useCorsProxy = true;
-      if (i === retries) throw e;
-      await new Promise(r => setTimeout(r, 600 * (i + 1)));
+      lastError = e;
+      console.warn(`[AniLok] attempt ${i+1} failed — ${path}:`, e.message);
+      if (!USE_OWN_PROXY && !useCorsFallback) window._useCorsProxy = true;
     }
   }
+  throw lastError;
 }
 
 // ─────────────────────────────────────────────
