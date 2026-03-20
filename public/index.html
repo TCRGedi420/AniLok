@@ -1280,13 +1280,11 @@ async function api(path, retries = 2) {
     const useProxy = OWN_PROXY ? false : (i > 0 || window._useCorsProxy);
     const url = useProxy ? proxyUrl : directUrl;
     try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 12000);
-      const res = await fetch(url, {
-        headers: { 'Accept': 'application/json' },
-        signal: controller.signal
-      });
-      clearTimeout(timer);
+      // ✅ REPLACE WITH THIS
+      const fetchPromise   = fetch(url, { headers: { 'Accept': 'application/json' } });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Request timed out after 15s')), 15000));
+      const res = await Promise.race([fetchPromise, timeoutPromise]);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       if (!useProxy) window._useCorsProxy = false;
