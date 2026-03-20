@@ -1218,21 +1218,14 @@
 <div class="toast-container" id="toast-container"></div>
 
 <script>
-// ─────────────────────────────────────────────
-// CONFIG
-// ─────────────────────────────────────────────
 // ─── PROXY SETUP ──────────────────────────────────────────────────────────
-// After deploying anilok-proxy to Vercel, paste your URL here.
-// Example: 'https://anilok-proxy-xyz.vercel.app/proxy'
-// Leave as '' to auto-fallback to corsproxy.io.
+// Use /proxy on any real HTTP origin. Only use direct URL on bare file://
+const UPSTREAM      = 'https://animelokam.vercel.app/api/v2/hianime';
 const USE_OWN_PROXY = window.location.protocol !== 'file:';
 const API_BASE      = USE_OWN_PROXY ? '/proxy' : UPSTREAM;
+const CORS_PROXY    = 'https://corsproxy.io/?url=';
 
-const UPSTREAM   = 'https://animelokam.vercel.app/api/v2/hianime';
-const CORS_PROXY = 'https://corsproxy.io/?url=';
-// ──────────────────────────────────────────────────────────────────────────
-
-// Genre list
+// ─── GENRES ───────────────────────────────────────────────────────────────
 const GENRES = [
   'Action','Adventure','Cars','Comedy','Dementia','Demons','Drama','Ecchi',
   'Fantasy','Game','Hentai','Historical','Horror','Josei','Kids','Magic',
@@ -1243,31 +1236,31 @@ const GENRES = [
 ];
 
 const CAT_ICONS = {
-  movie: '🎬', tv: '📺', ova: '💿', ona: '🌐', special: '⭐',
-  'top-airing': '🔥', 'most-popular': '👑', 'top-upcoming': '🚀',
-  'recently-updated': '🆕', action: '⚔️', romance: '💕', comedy: '😄',
-  fantasy: '🧙', horror: '👻', mystery: '🔍', default: '🎌'
+  movie:'🎬', tv:'📺', ova:'💿', ona:'🌐', special:'⭐',
+  'top-airing':'🔥', 'most-popular':'👑', 'top-upcoming':'🚀',
+  'recently-updated':'🆕', action:'⚔️', romance:'💕', comedy:'😄',
+  fantasy:'🧙', horror:'👻', mystery:'🔍', default:'🎌'
 };
 
-// ─────────────────────────────────────────────
-// STATE
-// ─────────────────────────────────────────────
-let currentAnimeId = null;
-let currentEpId = null;
-let currentVersion = 'sub'; // sub | dub
-let currentServer = null;
-let allEpisodes = [];
-let heroItems = [];
-let heroIndex = 0;
-let heroInterval = null;
-let catPage = 1;
-let catType = '';
-let catGenre = '';
-let searchTimeout = null;
+// ─── STATE ────────────────────────────────────────────────────────────────
+let currentAnimeId  = null;
+let currentEpId     = null;
+let currentVersion  = 'sub';
+let currentServer   = null;
+let allEpisodes     = [];
+let heroItems       = [];
+let heroIndex       = 0;
+let heroInterval    = null;
+let catPage         = 1;
+let catType         = '';
+let catGenre        = '';
+let searchTimeout   = null;
+let _currentServerList = [];
 
-// ─────────────────────────────────────────────
-// API
-// ─────────────────────────────────────────────
+// ─── API ──────────────────────────────────────────────────────────────────
+// Plain fetch only — NO AbortSignal, NO setTimeout, NO Promise.race.
+// Those all use postMessage internally and throw DataCloneError in
+// Vercel's sandboxed runtime.
 async function api(path, retries = 2) {
   const directUrl       = `${API_BASE}${path}`;
   const corsFallbackUrl = `${CORS_PROXY}${encodeURIComponent(`${UPSTREAM}${path}`)}`;
@@ -1298,25 +1291,23 @@ async function api(path, retries = 2) {
   throw lastError;
 }
 
-// ─────────────────────────────────────────────
-// TOAST
-// ─────────────────────────────────────────────
+// ─── TOAST ────────────────────────────────────────────────────────────────
 function toast(msg, type = 'info') {
   const c = document.getElementById('toast-container');
   const t = document.createElement('div');
   t.className = `toast ${type}`;
   t.innerHTML = `
-    <svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24" style="color:${type==='error'?'var(--accent3)':'var(--accent)'}">
-      <circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01" stroke="currentColor" stroke-width="2" fill="none"/>
+    <svg width="14" height="14" fill="currentColor" viewBox="0 0 24 24"
+      style="color:${type==='error'?'var(--accent3)':'var(--accent)'}">
+      <circle cx="12" cy="12" r="10"/>
+      <path d="M12 8v4M12 16h.01" stroke="currentColor" stroke-width="2" fill="none"/>
     </svg>
     ${msg}`;
   c.appendChild(t);
   setTimeout(() => t.remove(), 4000);
 }
 
-// ─────────────────────────────────────────────
-// NAVIGATION
-// ─────────────────────────────────────────────
+// ─── NAVIGATION ───────────────────────────────────────────────────────────
 function navigateTo(page) {
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
   document.getElementById(`${page}-page`).classList.add('active');
@@ -1326,33 +1317,30 @@ function navigateTo(page) {
 }
 
 function navigateToCat(type, page = 1) {
-  catType = type;
+  catType  = type;
   catGenre = '';
-  catPage = page;
+  catPage  = page;
   loadCategoryPage(type, page);
   navigateTo('cat');
   updateNavActive(type);
 }
 
 function navigateToGenre(genre, page = 1) {
-  catType = 'genre';
+  catType  = 'genre';
   catGenre = genre;
-  catPage = page;
+  catPage  = page;
   loadGenrePage(genre, page);
   navigateTo('cat');
 }
 
 function updateNavActive(type) {
   document.querySelectorAll('nav a').forEach(a => a.classList.remove('active'));
-  const map = { movie: 1, tv: 2, ova: 3, ona: 4, special: 5, 'most-popular': 6 };
-  if (map[type] !== undefined) {
+  const map = { movie:1, tv:2, ova:3, ona:4, special:5, 'most-popular':6 };
+  if (map[type] !== undefined)
     document.querySelectorAll('nav a')[map[type]]?.classList.add('active');
-  }
 }
 
-// ─────────────────────────────────────────────
-// ANIME CARD BUILDER
-// ─────────────────────────────────────────────
+// ─── CARD BUILDER ─────────────────────────────────────────────────────────
 function animeCard(a, extraClass = '') {
   const sub = a.episodes?.sub || a.episodeCount || '';
   const dub = a.episodes?.dub || '';
@@ -1376,7 +1364,7 @@ function animeCard(a, extraClass = '') {
         <div class="card-title">${escHtml(a.name)}</div>
         <div class="card-meta">
           ${a.duration ? `<span>${a.duration}</span><span class="dot"></span>` : ''}
-          ${a.rating ? `<span>⭐ ${a.rating}</span>` : ''}
+          ${a.rating   ? `<span>⭐ ${a.rating}</span>` : ''}
         </div>
       </div>
     </div>`;
@@ -1393,33 +1381,50 @@ function skeletonCard() {
 }
 
 function escHtml(s) {
-  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  return (s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;')
+                  .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// ─────────────────────────────────────────────
-// HOME PAGE
-// ─────────────────────────────────────────────
+// ─── HOME ─────────────────────────────────────────────────────────────────
 async function loadHome() {
-  // Show skeletons
   ['trending-row','popular-row','latest-row','upcoming-row'].forEach(id => {
-    document.getElementById(id).innerHTML = Array(8).fill(0).map(() => `
-      <div style="flex-shrink:0;width:160px">${skeletonCard()}</div>`).join('');
+    document.getElementById(id).innerHTML = Array(8).fill(0).map(() =>
+      `<div style="flex-shrink:0;width:160px">${skeletonCard()}</div>`).join('');
   });
 
   try {
     const data = await api('/home');
-    const d = data.data || data;
+    console.log('[AniLok] /home response:', JSON.stringify(data).slice(0,600));
 
-    setupHero(d.spotlightAnimes || d.trendingAnimes?.slice(0,5) || []);
-    renderRow('trending-row', d.trendingAnimes || []);
-    renderRow('popular-row', d.mostPopularAnimes || d.trendingAnimes || []);
-    renderTopList(d.top10Animes?.today || d.mostPopularAnimes?.slice(0,10) || []);
-    renderRow('latest-row', d.latestEpisodeAnimes || d.recentlyUpdatedAnimes || []);
-    renderRow('upcoming-row', d.topUpcomingAnimes || d.upcomingAnimes || []);
+    const d = data?.data || data || {};
+
+    const spotlight = d.spotlightAnimes || d.trendingAnimes?.slice(0,5) || [];
+    if (spotlight.length) setupHero(spotlight);
+    else document.getElementById('hero-title').textContent = 'Welcome to AniLok';
+
+    renderRow('trending-row', d.trendingAnimes      || []);
+    renderRow('popular-row',  d.mostPopularAnimes    || d.trendingAnimes || []);
+    renderRow('latest-row',   d.latestEpisodeAnimes  || d.recentlyUpdatedAnimes || []);
+    renderRow('upcoming-row', d.topUpcomingAnimes    || d.upcomingAnimes || []);
+
+    const top10 = d.top10Animes?.today
+               || d.top10Animes?.week
+               || d.mostPopularAnimes?.slice(0,10)
+               || [];
+    renderTopList(top10);
     renderGenres();
+
   } catch (e) {
-    toast('Failed to load home data. Please try refreshing.', 'error');
+    console.error('[AniLok] loadHome failed:', e);
+    toast(`Home load failed: ${e.message}`, 'error');
     renderGenres();
+    ['trending-row','popular-row','latest-row','upcoming-row'].forEach(id => {
+      document.getElementById(id).innerHTML =
+        `<p style="color:var(--text-muted);font-size:0.8rem;padding:20px 4px">
+           Failed to load —
+           <span style="color:var(--accent);cursor:pointer" onclick="loadHome()">retry</span>
+         </p>`;
+    });
   }
 }
 
@@ -1430,56 +1435,66 @@ function setupHero(animes) {
   renderHeroItem(0);
 
   const dots = document.getElementById('hero-dots');
-  dots.innerHTML = animes.slice(0, 6).map((_, i) => `
-    <div class="hero-dot ${i===0?'active':''}" onclick="goToHero(${i})"></div>`).join('');
+  dots.innerHTML = animes.slice(0,6).map((_,i) =>
+    `<div class="hero-dot ${i===0?'active':''}" onclick="goToHero(${i})"></div>`).join('');
 
   clearInterval(heroInterval);
   heroInterval = setInterval(() => {
     heroIndex = (heroIndex + 1) % Math.min(heroItems.length, 6);
     renderHeroItem(heroIndex);
-    document.querySelectorAll('.hero-dot').forEach((d,i) => d.classList.toggle('active', i===heroIndex));
+    document.querySelectorAll('.hero-dot')
+            .forEach((d,i) => d.classList.toggle('active', i===heroIndex));
   }, 5000);
 }
 
 function renderHeroItem(i) {
   const a = heroItems[i];
   if (!a) return;
-  document.getElementById('hero-img').src = a.poster || '';
+  document.getElementById('hero-img').src        = a.poster || '';
   document.getElementById('hero-title').textContent = a.name || 'Unknown';
-  document.getElementById('hero-desc').textContent = a.description || a.otherInfo?.join(' | ') || '';
+  document.getElementById('hero-desc').textContent  =
+    a.description || a.otherInfo?.join(' | ') || '';
 
-  const meta = document.getElementById('hero-meta');
-  meta.innerHTML = `
-    ${a.otherInfo ? a.otherInfo.map(x => `<span>${escHtml(x)}</span>`).join('<span style="opacity:0.3">|</span>') : ''}
-    ${a.rank ? `<span class="rating">⭐ #${a.rank}</span>` : ''}
-  `;
+  document.getElementById('hero-meta').innerHTML = `
+    ${a.otherInfo
+      ? a.otherInfo.map(x => `<span>${escHtml(x)}</span>`)
+                   .join('<span style="opacity:0.3">|</span>')
+      : ''}
+    ${a.rank ? `<span class="rating">⭐ #${a.rank}</span>` : ''}`;
 
   document.getElementById('hero-watch-btn').onclick = () => openAnime(a.id);
-  document.getElementById('hero-info-btn').onclick = () => openAnime(a.id);
+  document.getElementById('hero-info-btn').onclick  = () => openAnime(a.id);
 }
 
 function goToHero(i) {
   heroIndex = i;
   renderHeroItem(i);
-  document.querySelectorAll('.hero-dot').forEach((d,di) => d.classList.toggle('active', di===i));
+  document.querySelectorAll('.hero-dot')
+          .forEach((d,di) => d.classList.toggle('active', di===i));
   clearInterval(heroInterval);
   heroInterval = setInterval(() => {
     heroIndex = (heroIndex + 1) % Math.min(heroItems.length, 6);
     renderHeroItem(heroIndex);
-    document.querySelectorAll('.hero-dot').forEach((d,di) => d.classList.toggle('active', di===heroIndex));
+    document.querySelectorAll('.hero-dot')
+            .forEach((d,di) => d.classList.toggle('active', di===heroIndex));
   }, 5000);
 }
 
 function renderRow(id, animes) {
   const el = document.getElementById(id);
-  if (!animes.length) { el.innerHTML = '<p style="color:var(--text-muted);font-size:0.8rem;padding:20px">No data available</p>'; return; }
-  el.innerHTML = animes.map(a => `<div style="flex-shrink:0;width:160px">${animeCard(a)}</div>`).join('');
+  if (!animes.length) {
+    el.innerHTML =
+      '<p style="color:var(--text-muted);font-size:0.8rem;padding:20px">No data available</p>';
+    return;
+  }
+  el.innerHTML = animes.map(a =>
+    `<div style="flex-shrink:0;width:160px">${animeCard(a)}</div>`).join('');
 }
 
 function renderTopList(animes) {
-  const el = document.getElementById('top-list');
+  const el        = document.getElementById('top-list');
   const rankClass = i => i===0?'gold':i===1?'silver':i===2?'bronze':'';
-  el.innerHTML = animes.slice(0,10).map((a,i) => `
+  el.innerHTML    = animes.slice(0,10).map((a,i) => `
     <div class="top-item" onclick="openAnime('${a.id}')">
       <div class="top-rank ${rankClass(i)}">${i+1}</div>
       <img src="${a.poster}" alt="${escHtml(a.name)}" loading="lazy" onerror="this.src=''">
@@ -1487,70 +1502,61 @@ function renderTopList(animes) {
         <div class="top-title">${escHtml(a.name)}</div>
         <div class="top-sub-info">
           ${a.episodes?.sub ? `<span>SUB: ${a.episodes.sub}</span>` : ''}
-          ${a.type ? `<span>${a.type}</span>` : ''}
+          ${a.type          ? `<span>${a.type}</span>`               : ''}
         </div>
       </div>
     </div>`).join('');
 }
 
 function renderGenres() {
-  const el = document.getElementById('genres-grid');
-  el.innerHTML = GENRES.map(g => `
-    <div class="cat-chip" onclick="navigateToGenre('${g.toLowerCase()}')">${g}</div>`).join('');
+  document.getElementById('genres-grid').innerHTML =
+    GENRES.map(g =>
+      `<div class="cat-chip" onclick="navigateToGenre('${g.toLowerCase()}')">${g}</div>`
+    ).join('');
 
-  const footer = document.getElementById('footer-genre-tags');
-  footer.innerHTML = GENRES.map(g => `
-    <a class="footer-tag" onclick="navigateToGenre('${g.toLowerCase()}')">${g}</a>`).join('');
+  document.getElementById('footer-genre-tags').innerHTML =
+    GENRES.map(g =>
+      `<a class="footer-tag" onclick="navigateToGenre('${g.toLowerCase()}')">${g}</a>`
+    ).join('');
 }
 
 function scrollRow(id, dir) {
-  const el = document.getElementById(`${id}-row`);
-  el.scrollBy({ left: dir * 500, behavior: 'smooth' });
+  document.getElementById(`${id}-row`).scrollBy({ left: dir * 500, behavior: 'smooth' });
 }
 
-// ─────────────────────────────────────────────
-// OPEN ANIME / WATCH PAGE
-// ─────────────────────────────────────────────
+// ─── OPEN ANIME ───────────────────────────────────────────────────────────
 async function openAnime(animeId) {
   currentAnimeId = animeId;
-  currentEpId = null;
-  allEpisodes = [];
+  currentEpId    = null;
+  allEpisodes    = [];
   navigateTo('watch');
 
-  // Reset UI
   document.getElementById('player-loading').style.display = 'flex';
-  document.getElementById('player-error').style.display = 'none';
-  document.getElementById('player-iframe').style.display = 'none';
-  document.getElementById('info-title').textContent = 'Loading...';
-  document.getElementById('info-desc').textContent = '';
-  document.getElementById('info-meta').innerHTML = '';
-  document.getElementById('episodes-list').innerHTML = Array(10).fill(0).map(() =>
-    `<div class="ep-item skeleton" style="background:linear-gradient(90deg,var(--surface) 25%,var(--surface2) 50%,var(--surface) 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;height:32px"></div>`
-  ).join('');
+  document.getElementById('player-error').style.display   = 'none';
+  document.getElementById('player-iframe').style.display  = 'none';
+  document.getElementById('info-title').textContent       = 'Loading...';
+  document.getElementById('info-desc').textContent        = '';
+  document.getElementById('info-meta').innerHTML          = '';
+  document.getElementById('server-btns').innerHTML        = '';
+  document.getElementById('episodes-list').innerHTML      = Array(10).fill(0).map(() =>
+    `<div class="ep-item skeleton" style="height:32px"></div>`).join('');
   document.getElementById('related-list').innerHTML = '';
-  document.getElementById('server-btns').innerHTML = '';
 
   try {
-    // Get anime info
     const infoData = await api(`/anime/${animeId}`);
-    const info = infoData.data || infoData;
-    renderAnimeInfo(info);
+    renderAnimeInfo(infoData.data || infoData);
 
-    // Get episodes
     const epData = await api(`/anime/${animeId}/episodes`);
-    const eps = (epData.data?.episodes) || epData.episodes || [];
-    allEpisodes = eps;
+    const eps    = epData.data?.episodes || epData.episodes || [];
+    allEpisodes  = eps;
     renderEpisodes(eps);
     document.getElementById('ep-count').textContent = `${eps.length} episodes`;
 
-    // Load first episode
-    if (eps.length > 0) {
-      loadEpisode(eps[0].episodeId, eps[0].number);
-    } else {
-      showPlayerError('No episodes available yet.');
-    }
+    if (eps.length > 0) loadEpisode(eps[0].episodeId, eps[0].number);
+    else showPlayerError('No episodes available yet.');
+
   } catch (e) {
-    toast(`Failed to load anime info: ${e.message}`, 'error');
+    toast(`Failed to load anime: ${e.message}`, 'error');
     showPlayerError('Failed to load anime data. Please try again.');
   }
 }
@@ -1558,84 +1564,92 @@ async function openAnime(animeId) {
 function renderAnimeInfo(info) {
   const anime = info.anime?.info || info.anime || info;
 
-  document.getElementById('info-title').textContent = anime.name || anime.title || 'Unknown';
-  document.getElementById('info-desc').textContent = anime.description || anime.synopsis || '';
+  document.getElementById('info-title').textContent =
+    anime.name || anime.title || 'Unknown';
+  document.getElementById('info-desc').textContent  =
+    anime.description || anime.synopsis || '';
 
-  const meta = document.getElementById('info-meta');
   const tags = [
-    anime.stats?.type || anime.type,
+    anime.stats?.type          || anime.type,
     anime.stats?.episodes?.sub ? `${anime.stats.episodes.sub} Sub` : null,
     anime.stats?.episodes?.dub ? `${anime.stats.episodes.dub} Dub` : null,
-    anime.stats?.rating || anime.rating,
+    anime.stats?.rating        || anime.rating,
     anime.stats?.quality
   ].filter(Boolean);
-  meta.innerHTML = tags.map(t => `<span class="info-tag">${escHtml(String(t))}</span>`).join('');
 
-  // Related
-  const related = info.relatedAnimes || info.recommendedAnimes || info.seasons || [];
-  const relEl = document.getElementById('related-list');
+  document.getElementById('info-meta').innerHTML =
+    tags.map(t => `<span class="info-tag">${escHtml(String(t))}</span>`).join('');
+
+  const related  = info.relatedAnimes || info.recommendedAnimes || info.seasons || [];
+  const relEl    = document.getElementById('related-list');
   relEl.innerHTML = related.slice(0,8).map(r => `
     <div class="related-item" onclick="openAnime('${r.id}')">
-      <img src="${r.poster}" alt="${escHtml(r.name||r.title||'')}" loading="lazy" onerror="this.src=''"/>
+      <img src="${r.poster}" alt="${escHtml(r.name||r.title||'')}" loading="lazy"
+           onerror="this.src=''"/>
       <div class="related-info">
         <div class="related-title">${escHtml(r.name||r.title||'Related')}</div>
         <div class="related-meta">${r.type||''} ${r.episodes?.sub ? `· ${r.episodes.sub} ep` : ''}</div>
       </div>
-    </div>`).join('') || '<p style="padding:12px;font-size:0.78rem;color:var(--text-muted)">No related anime</p>';
+    </div>`).join('')
+    || '<p style="padding:12px;font-size:0.78rem;color:var(--text-muted)">No related anime</p>';
 
-  // Details
   const moreInfo = info.anime?.moreInfo || info.moreInfo || {};
-  const details = document.getElementById('anime-details-list');
-  const pairs = Object.entries(moreInfo).filter(([k, v]) => v && v !== 'N/A');
-  details.innerHTML = pairs.slice(0,8).map(([k, v]) => `
-    <div style="display:flex;justify-content:space-between;margin-bottom:8px;border-bottom:1px solid var(--border);padding-bottom:6px">
-      <span style="color:var(--text-muted);text-transform:capitalize">${k.replace(/([A-Z])/g,' $1').trim()}</span>
-      <span style="color:var(--text);text-align:right;max-width:55%;word-break:break-word">${Array.isArray(v)?v.join(', '):v}</span>
-    </div>`).join('') || '<span style="color:var(--text-muted)">No details available</span>';
+  document.getElementById('anime-details-list').innerHTML =
+    Object.entries(moreInfo).filter(([,v]) => v && v !== 'N/A').slice(0,8)
+      .map(([k,v]) => `
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px;
+                    border-bottom:1px solid var(--border);padding-bottom:6px">
+          <span style="color:var(--text-muted);text-transform:capitalize">
+            ${k.replace(/([A-Z])/g,' $1').trim()}
+          </span>
+          <span style="color:var(--text);text-align:right;max-width:55%;word-break:break-word">
+            ${Array.isArray(v) ? v.join(', ') : v}
+          </span>
+        </div>`).join('')
+    || '<span style="color:var(--text-muted)">No details available</span>';
 }
 
 function renderEpisodes(eps) {
   const el = document.getElementById('episodes-list');
-  if (!eps.length) { el.innerHTML = '<p style="color:var(--text-muted);font-size:0.78rem;padding:12px;grid-column:1/-1">No episodes found</p>'; return; }
+  if (!eps.length) {
+    el.innerHTML =
+      '<p style="color:var(--text-muted);font-size:0.78rem;padding:12px;grid-column:1/-1">No episodes found</p>';
+    return;
+  }
   el.innerHTML = eps.map(ep => `
-    <div class="ep-item ${ep.isFiller ? 'filler' : ''}" id="ep-${ep.episodeId.replace(/[^a-z0-9]/gi,'_')}"
-      onclick="loadEpisode('${ep.episodeId}', ${ep.number})" title="${escHtml(ep.title||`Episode ${ep.number}`)}">
+    <div class="ep-item ${ep.isFiller ? 'filler' : ''}"
+      id="ep-${ep.episodeId.replace(/[^a-z0-9]/gi,'_')}"
+      onclick="loadEpisode('${ep.episodeId}',${ep.number})"
+      title="${escHtml(ep.title || `Episode ${ep.number}`)}">
       ${ep.number}
     </div>`).join('');
 }
 
 function filterEpisodes(val) {
   const num = parseInt(val);
-  if (!num) {
-    renderEpisodes(allEpisodes);
-    return;
-  }
+  if (!num) { renderEpisodes(allEpisodes); return; }
   const filtered = allEpisodes.filter(ep => ep.number >= num && ep.number < num + 50);
   renderEpisodes(filtered);
-  if (filtered.length === 1) {
-    loadEpisode(filtered[0].episodeId, filtered[0].number);
-  }
+  if (filtered.length === 1) loadEpisode(filtered[0].episodeId, filtered[0].number);
 }
 
-// ─────────────────────────────────────────────
-// EPISODE / STREAM LOADING
-// ─────────────────────────────────────────────
+// ─── EPISODE LOADING ──────────────────────────────────────────────────────
 async function loadEpisode(epId, epNum) {
   currentEpId = epId;
 
-  // Highlight active episode
   document.querySelectorAll('.ep-item').forEach(e => e.classList.remove('active'));
   const safeId = epId.replace(/[^a-z0-9]/gi,'_');
-  const epEl = document.getElementById(`ep-${safeId}`);
+  const epEl   = document.getElementById(`ep-${safeId}`);
   if (epEl) { epEl.classList.add('active'); epEl.scrollIntoView({ behavior:'smooth', block:'nearest' }); }
 
   document.getElementById('player-loading').style.display = 'flex';
-  document.getElementById('player-error').style.display = 'none';
-  document.getElementById('player-iframe').style.display = 'none';
-  document.getElementById('server-btns').innerHTML = '';
+  document.getElementById('player-error').style.display   = 'none';
+  document.getElementById('player-iframe').style.display  = 'none';
+  document.getElementById('server-btns').innerHTML        = '';
 
   try {
-    const data = await api(`/episode/servers?animeEpisodeId=${epId}`);
+    // NOTE: epId is NOT encoded — it contains ?ep= which must stay raw
+    const data    = await api(`/episode/servers?animeEpisodeId=${epId}`);
     const servers = data.data || data;
     renderServers(servers);
   } catch (e) {
@@ -1644,15 +1658,27 @@ async function loadEpisode(epId, epNum) {
   }
 }
 
+// ─── SERVERS ──────────────────────────────────────────────────────────────
+// Priority: more reliable servers first, vidsrc last (frequent 500s)
+const SERVER_PRIORITY = [
+  'megacloud','vidstreaming','hd-1','hd-2','vidsrc','streamsb','streamtape'
+];
+
+function sortByPriority(srvList) {
+  return [...srvList].sort((a, b) => {
+    const ai = SERVER_PRIORITY.indexOf(a.serverName.toLowerCase());
+    const bi = SERVER_PRIORITY.indexOf(b.serverName.toLowerCase());
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+}
+
 function renderServers(servers) {
   const root       = servers.data || servers;
   const subServers = root.sub || [];
   const dubServers = root.dub || [];
 
-  const btnSub = document.getElementById('btn-sub');
-  const btnDub = document.getElementById('btn-dub');
-  btnSub.disabled = !subServers.length;
-  btnDub.disabled = !dubServers.length;
+  document.getElementById('btn-sub').disabled = !subServers.length;
+  document.getElementById('btn-dub').disabled = !dubServers.length;
 
   if (currentVersion === 'dub' && !dubServers.length && subServers.length) setVersion('sub');
   if (currentVersion === 'sub' && !subServers.length && dubServers.length) setVersion('dub');
@@ -1663,62 +1689,109 @@ function renderServers(servers) {
 function renderServerButtons(srvList) {
   const container = document.getElementById('server-btns');
   if (!srvList || !srvList.length) {
-    container.innerHTML = '<span style="font-size:0.75rem;color:var(--text-muted);padding:4px 8px">No servers</span>';
+    container.innerHTML =
+      '<span style="font-size:0.75rem;color:var(--text-muted);padding:4px 8px">No servers</span>';
     showPlayerError('No servers available for this version.');
     return;
   }
-  container.innerHTML = srvList.map((s, i) => `<button class="ctrl-btn ${i===0?'active':''}"
-    onclick="selectServer('${s.serverId}','${escHtml(s.serverName)}',this)"
-    data-serverid="${s.serverId}">${escHtml(s.serverName)}</button>`).join('');
 
-  const firstBtn = container.querySelector('button');
-  selectServer(srvList[0].serverId, srvList[0].serverName, firstBtn);
+  _currentServerList = sortByPriority(srvList);
+
+  container.innerHTML = _currentServerList.map(s => `
+    <button class="ctrl-btn"
+      id="srv-btn-${s.serverId}"
+      onclick="selectServer('${s.serverId}','${escHtml(s.serverName)}',this)"
+      data-serverid="${s.serverId}"
+      data-servername="${escHtml(s.serverName)}"
+      title="${escHtml(s.serverName)}">${escHtml(s.serverName)}</button>`).join('');
+
+  // Walk the priority list; skip any that return 500
+  autoSelectBestServer(0);
 }
 
-async function selectServer(serverId, serverName, btn) {
-  document.querySelectorAll('#server-btns .ctrl-btn').forEach(b => b.classList.remove('active'));
-  if (btn && typeof btn === 'object' && btn.classList) btn.classList.add('active');
+async function autoSelectBestServer(startIndex) {
+  for (let i = startIndex; i < _currentServerList.length; i++) {
+    const s   = _currentServerList[i];
+    const btn = document.getElementById(`srv-btn-${s.serverId}`);
+    const ok  = await selectServer(s.serverId, s.serverName, btn, true);
+    if (ok) return; // stream loaded — stop trying
+  }
+  showPlayerError('All servers failed. Try a different episode or come back later.');
+}
+
+async function selectServer(serverId, serverName, btn, _autoFallback = false) {
+  // Reset button states
+  document.querySelectorAll('#server-btns .ctrl-btn').forEach(b => {
+    b.classList.remove('active');
+    b.style.opacity = '1';
+  });
+  if (btn && typeof btn === 'object' && btn.classList) {
+    btn.classList.add('active');
+    btn.textContent = `${serverName} ⟳`; // loading indicator
+  }
   currentServer = serverId;
 
   document.getElementById('player-loading').style.display = 'flex';
-  document.getElementById('player-error').style.display = 'none';
-  document.getElementById('player-iframe').style.display = 'none';
+  document.getElementById('player-error').style.display   = 'none';
+  document.getElementById('player-iframe').style.display  = 'none';
 
   try {
-    const data = await api(`/episode/sources?animeEpisodeId=${currentEpId}&server=${encodeURIComponent(serverName)}&category=${currentVersion}`);
+    // NOTE: currentEpId is NOT encoded (contains raw ?ep=)
+    // serverName IS encoded (can contain spaces / special chars)
+    const data = await api(
+      `/episode/sources?animeEpisodeId=${currentEpId}` +
+      `&server=${encodeURIComponent(serverName)}&category=${currentVersion}`
+    );
     const src = data.data || data;
+
+    if (btn && typeof btn === 'object') btn.textContent = serverName; // restore label
     loadStream(src);
+    return true; // ← success signal for autoSelectBestServer
+
   } catch (e) {
-    toast(`Server ${serverName} failed: ${e.message}`, 'error');
-    showPlayerError(`Server "${serverName}" failed. Try another server.`);
+    // Mark button as failed
+    if (btn && typeof btn === 'object') {
+      btn.textContent  = `${serverName} ✕`;
+      btn.style.opacity = '0.45';
+      btn.classList.remove('active');
+    }
+
+    const is500 = e.message.includes('500') || e.message.includes('cheerio');
+    if (_autoFallback && is500) {
+      // Silent — let autoSelectBestServer move to next server
+      console.warn(`[AniLok] ${serverName} → 500, trying next`);
+      return false;
+    }
+
+    toast(`${serverName} failed — ${e.message.slice(0,80)}`, 'error');
+    showPlayerError(`"${serverName}" failed. Try another server.`);
+    return false; // ← failure signal
   }
 }
 
+// ─── STREAM LOADING ───────────────────────────────────────────────────────
 function loadStream(src) {
-  const iframe = document.getElementById('player-iframe');
+  const iframe  = document.getElementById('player-iframe');
   const loading = document.getElementById('player-loading');
-  const errorEl = document.getElementById('player-error');
 
-  // Try iframe embed URL first
   const embedUrl = src.iframe || src.embedUrl || src.url;
-  const hlsUrl = src.sources?.[0]?.url || src.link;
+  const hlsUrl   = src.sources?.[0]?.url || src.link;
 
   if (embedUrl) {
-    iframe.src = embedUrl;
+    iframe.src    = embedUrl;
     iframe.onload = () => {
       loading.style.display = 'none';
-      iframe.style.display = 'block';
+      iframe.style.display  = 'block';
     };
     iframe.onerror = () => {
-      // Try CORS proxy for HLS
       if (hlsUrl) tryHLS(hlsUrl);
       else showPlayerError('Failed to load stream. Try another server.');
     };
-    // Timeout fallback
+    // Fallback reveal after 4s in case onload never fires (cross-origin iframes)
     setTimeout(() => {
       if (loading.style.display !== 'none') {
         loading.style.display = 'none';
-        iframe.style.display = 'block';
+        iframe.style.display  = 'block';
       }
     }, 4000);
   } else if (hlsUrl) {
@@ -1727,74 +1800,71 @@ function loadStream(src) {
     showPlayerError('No stream source available. Try another server.');
   }
 
-  // Quality
+  // Populate quality selector if multiple sources
   if (src.sources?.length > 1) {
-    const qg = document.getElementById('quality-group');
-    const qs = document.getElementById('quality-select');
-    qg.style.display = 'flex';
-    qs.innerHTML = src.sources.map(s => `<option value="${s.url}">${s.quality||'Auto'}</option>`).join('');
+    document.getElementById('quality-group').style.display = 'flex';
+    document.getElementById('quality-select').innerHTML =
+      src.sources.map(s =>
+        `<option value="${s.url}">${s.quality || 'Auto'}</option>`).join('');
   }
 }
 
 function tryHLS(url) {
-  // Attempt direct load; if CORS fails, use proxy
-  const iframe = document.getElementById('player-iframe');
+  const iframe  = document.getElementById('player-iframe');
   const loading = document.getElementById('player-loading');
+  const proxy   = `${CORS_PROXY}${encodeURIComponent(url)}`;
 
-  const proxyUrl = `${CORS_PROXY}${encodeURIComponent(url)}`;
-  iframe.src = `data:text/html,<video src="${url}" controls autoplay style="width:100%;height:100%;background:#000" onerror="document.location='${proxyUrl}'"></video>`;
+  iframe.src = `data:text/html,<video src="${url}" controls autoplay
+    style="width:100%;height:100%;background:#000"
+    onerror="document.location='${proxy}'"></video>`;
   loading.style.display = 'none';
-  iframe.style.display = 'block';
+  iframe.style.display  = 'block';
 }
 
-function setQuality(url) {
-  tryHLS(url);
-}
+function setQuality(url) { tryHLS(url); }
 
 function retryStream() {
-  // Click next available server
-  const btns = document.querySelectorAll('#server-btns .ctrl-btn:not(.active)');
-  if (btns.length) btns[0].click();
-  else toast('No more servers available.', 'error');
+  // Resume auto-fallback from the server after the last active one
+  const activeName = document.querySelector('#server-btns .ctrl-btn.active')
+                              ?.dataset?.servername;
+  const idx     = _currentServerList.findIndex(s => s.serverName === activeName);
+  const nextIdx = idx === -1 ? 0 : idx + 1;
+  if (nextIdx < _currentServerList.length) autoSelectBestServer(nextIdx);
+  else toast('No more servers to try.', 'error');
 }
 
-function setVersion(v) {
-  currentVersion = v;
-  document.getElementById('btn-sub').classList.toggle('active', v === 'sub');
-  document.getElementById('btn-dub').classList.toggle('active', v === 'dub');
-  document.getElementById('btn-sub').classList.toggle('active-purple', false);
-  document.getElementById('btn-dub').classList.toggle('active-purple', v === 'dub');
-
-  if (currentEpId) loadEpisode(currentEpId, null);
-}
-
+// ─── PLAYER HELPERS ───────────────────────────────────────────────────────
 function showPlayerError(msg) {
   document.getElementById('player-loading').style.display = 'none';
-  document.getElementById('player-iframe').style.display = 'none';
-  document.getElementById('player-error').style.display = 'flex';
+  document.getElementById('player-iframe').style.display  = 'none';
+  document.getElementById('player-error').style.display   = 'flex';
   document.getElementById('player-error-msg').textContent = msg || 'Stream unavailable';
 }
 
 function toggleDesc() {
-  const d = document.getElementById('info-desc');
-  const rm = d.nextElementSibling;
+  const d        = document.getElementById('info-desc');
   const collapsed = d.classList.toggle('collapsed');
-  rm.textContent = collapsed ? 'Read more' : 'Read less';
+  d.nextElementSibling.textContent = collapsed ? 'Read more' : 'Read less';
 }
 
-// ─────────────────────────────────────────────
-// CATEGORY / GENRE PAGES
-// ─────────────────────────────────────────────
+function setVersion(v) {
+  currentVersion = v;
+  document.getElementById('btn-sub').classList.toggle('active',        v === 'sub');
+  document.getElementById('btn-dub').classList.toggle('active',        v === 'dub');
+  document.getElementById('btn-dub').classList.toggle('active-purple', v === 'dub');
+  if (currentEpId) loadEpisode(currentEpId, null);
+}
+
+// ─── CATEGORY PAGE ────────────────────────────────────────────────────────
 async function loadCategoryPage(type, page = 1) {
-  const icons = CAT_ICONS;
   const titles = {
-    movie: 'Movies', tv: 'TV Series', ova: 'OVA', ona: 'ONA', special: 'Specials',
-    'top-airing': 'Top Airing', 'most-popular': 'Most Popular',
-    'top-upcoming': 'Top Upcoming', 'recently-updated': 'Latest Episodes'
+    movie:'Movies', tv:'TV Series', ova:'OVA', ona:'ONA', special:'Specials',
+    'top-airing':'Top Airing', 'most-popular':'Most Popular',
+    'top-upcoming':'Top Upcoming', 'recently-updated':'Latest Episodes'
   };
 
-  document.getElementById('cat-icon').textContent = icons[type] || icons.default;
-  document.getElementById('cat-title').textContent = titles[type] || type;
+  document.getElementById('cat-icon').textContent     = CAT_ICONS[type] || CAT_ICONS.default;
+  document.getElementById('cat-title').textContent    = titles[type] || type;
   document.getElementById('cat-subtitle').textContent = `Browse all ${titles[type]||type} anime`;
   document.getElementById('cat-filter-bar').style.display = 'none';
 
@@ -1802,31 +1872,34 @@ async function loadCategoryPage(type, page = 1) {
   grid.innerHTML = Array(20).fill(0).map(() => skeletonCard()).join('');
 
   try {
-    const data = await api(`/category/${type}?page=${page}`);
-    const d = data.data || data;
+    const data   = await api(`/category/${type}?page=${page}`);
+    const d      = data.data || data;
     const animes = d.animes || d.results || [];
-    const totalPages = d.totalPages || d.hasNextPage ? page + 1 : page;
 
-    grid.innerHTML = animes.map(a => animeCard(a)).join('') ||
-      '<p style="color:var(--text-muted);padding:24px">No anime found.</p>';
+    grid.innerHTML = animes.map(a => animeCard(a)).join('')
+      || '<p style="color:var(--text-muted);padding:24px">No anime found.</p>';
 
-    renderPagination(page, totalPages, (p) => loadCategoryPage(type, p));
-    document.getElementById('cat-subtitle').textContent = `${d.totalAnimes || animes.length} anime`;
+    renderPagination(page, d.totalPages || (d.hasNextPage ? page+1 : page),
+      p => loadCategoryPage(type, p));
+    document.getElementById('cat-subtitle').textContent =
+      `${d.totalAnimes || animes.length} anime`;
+
   } catch (e) {
     toast(`Failed to load category: ${e.message}`, 'error');
-    grid.innerHTML = '<p style="color:var(--text-dim);padding:24px">Failed to load. Please try again.</p>';
+    grid.innerHTML =
+      '<p style="color:var(--text-dim);padding:24px">Failed to load. Please try again.</p>';
   }
 }
 
 async function loadGenrePage(genre, page = 1) {
-  document.getElementById('cat-icon').textContent = '🎭';
-  document.getElementById('cat-title').textContent = genre.charAt(0).toUpperCase() + genre.slice(1);
+  document.getElementById('cat-icon').textContent     = '🎭';
+  document.getElementById('cat-title').textContent    =
+    genre.charAt(0).toUpperCase() + genre.slice(1);
   document.getElementById('cat-subtitle').textContent = `Genre: ${genre}`;
 
-  // Show genre filter chips
   const filterBar = document.getElementById('cat-filter-bar');
   filterBar.style.display = 'flex';
-  filterBar.innerHTML = GENRES.slice(0, 16).map(g => `
+  filterBar.innerHTML = GENRES.slice(0,16).map(g => `
     <div class="filter-chip ${g.toLowerCase()===genre.toLowerCase()?'active':''}"
       onclick="navigateToGenre('${g.toLowerCase()}')">${g}</div>`).join('');
 
@@ -1834,43 +1907,45 @@ async function loadGenrePage(genre, page = 1) {
   grid.innerHTML = Array(20).fill(0).map(() => skeletonCard()).join('');
 
   try {
-    const data = await api(`/genre/${encodeURIComponent(genre)}?page=${page}`);
-    const d = data.data || data;
+    const data   = await api(`/genre/${encodeURIComponent(genre)}?page=${page}`);
+    const d      = data.data || data;
     const animes = d.animes || d.results || [];
 
-    grid.innerHTML = animes.map(a => animeCard(a)).join('') ||
-      '<p style="color:var(--text-muted);padding:24px">No anime found for this genre.</p>';
+    grid.innerHTML = animes.map(a => animeCard(a)).join('')
+      || '<p style="color:var(--text-muted);padding:24px">No anime found for this genre.</p>';
 
-    renderPagination(page, d.totalPages || (d.hasNextPage ? page + 1 : page),
-      (p) => loadGenrePage(genre, p));
-    document.getElementById('cat-subtitle').textContent = `${d.totalAnimes || animes.length} anime`;
+    renderPagination(page,
+      d.totalPages || (d.hasNextPage ? page+1 : page),
+      p => loadGenrePage(genre, p));
+    document.getElementById('cat-subtitle').textContent =
+      `${d.totalAnimes || animes.length} anime`;
+
   } catch (e) {
     toast(`Failed to load genre: ${e.message}`, 'error');
-    grid.innerHTML = '<p style="color:var(--text-dim);padding:24px">Failed to load. Please try again.</p>';
+    grid.innerHTML =
+      '<p style="color:var(--text-dim);padding:24px">Failed to load. Please try again.</p>';
   }
 }
 
 function renderPagination(current, total, onClick) {
-  const el = document.getElementById('cat-pagination');
+  const el  = document.getElementById('cat-pagination');
   if (total <= 1) { el.innerHTML = ''; return; }
 
+  const max   = Math.min(total, 999);
   const pages = [];
-  const max = Math.min(total, 999);
-  if (current > 1) pages.push({ label: '‹', val: current - 1 });
-  for (let i = Math.max(1, current - 2); i <= Math.min(max, current + 2); i++) pages.push({ label: i, val: i });
-  if (current < max) pages.push({ label: '›', val: current + 1 });
+  if (current > 1) pages.push({ label:'‹', val: current - 1 });
+  for (let i = Math.max(1, current-2); i <= Math.min(max, current+2); i++)
+    pages.push({ label: i, val: i });
+  if (current < max) pages.push({ label:'›', val: current + 1 });
 
   el.innerHTML = pages.map(p => `
-    <div class="page-btn ${p.val===current&&p.label==current?'active':''}" onclick="(${onClick.toString()})(${p.val})">
-      ${p.label}
-    </div>`).join('');
+    <div class="page-btn ${p.val===current && p.label===current ? 'active' : ''}"
+      onclick="(${onClick.toString()})(${p.val})">${p.label}</div>`).join('');
 }
 
-// ─────────────────────────────────────────────
-// SEARCH
-// ─────────────────────────────────────────────
+// ─── SEARCH ───────────────────────────────────────────────────────────────
 const searchInput = document.getElementById('search-input');
-const suggestBox = document.getElementById('search-suggestions');
+const suggestBox  = document.getElementById('search-suggestions');
 
 searchInput.addEventListener('input', e => {
   clearTimeout(searchTimeout);
@@ -1888,14 +1963,13 @@ searchInput.addEventListener('keydown', e => {
 });
 
 document.addEventListener('click', e => {
-  if (!e.target.closest('#search-wrap') && !e.target.closest('#search-suggestions')) {
+  if (!e.target.closest('#search-wrap') && !e.target.closest('#search-suggestions'))
     suggestBox.classList.remove('show');
-  }
 });
 
 async function fetchSuggestions(q) {
   try {
-    const data = await api(`/search/suggest?q=${encodeURIComponent(q)}`);
+    const data  = await api(`/search/suggest?q=${encodeURIComponent(q)}`);
     const items = data.data?.suggestions || data.suggestions || [];
     renderSuggestions(items, q);
   } catch {
@@ -1905,27 +1979,31 @@ async function fetchSuggestions(q) {
 
 function renderSuggestions(items, q) {
   if (!items.length) { suggestBox.classList.remove('show'); return; }
-  suggestBox.innerHTML = items.slice(0, 8).map(s => `
-    <div class="sug-item" onclick="openAnime('${s.id}');document.getElementById('search-suggestions').classList.remove('show');document.getElementById('search-input').value=''">
+  suggestBox.innerHTML = items.slice(0,8).map(s => `
+    <div class="sug-item" onclick="openAnime('${s.id}');
+      document.getElementById('search-suggestions').classList.remove('show');
+      document.getElementById('search-input').value=''">
       <img src="${s.poster}" alt="${escHtml(s.name)}" onerror="this.style.display='none'"/>
       <div class="sug-info">
         <div class="sug-title">${escHtml(s.name)}</div>
         <div class="sug-meta">${s.moreInfo?.join(' · ') || s.jname || ''}</div>
       </div>
-    </div>`).join('') +
-    `<div class="sug-item" onclick="doSearch('${escHtml(q)}');document.getElementById('search-suggestions').classList.remove('show')"
-      style="border-top:1px solid var(--border);justify-content:center;color:var(--accent);font-size:0.8rem">
-      Search for "${escHtml(q)}" →
-    </div>`;
+    </div>`).join('')
+  + `<div class="sug-item" style="border-top:1px solid var(--border);
+       justify-content:center;color:var(--accent);font-size:0.8rem"
+       onclick="doSearch('${escHtml(q)}');
+         document.getElementById('search-suggestions').classList.remove('show')">
+       Search for "${escHtml(q)}" →
+     </div>`;
   suggestBox.classList.add('show');
 }
 
 async function doSearch(q) {
-  catType = 'search';
+  catType  = 'search';
   catGenre = '';
-  catPage = 1;
-  document.getElementById('cat-icon').textContent = '🔍';
-  document.getElementById('cat-title').textContent = `Search: ${q}`;
+  catPage  = 1;
+  document.getElementById('cat-icon').textContent     = '🔍';
+  document.getElementById('cat-title').textContent    = `Search: ${q}`;
   document.getElementById('cat-subtitle').textContent = 'Search results';
   document.getElementById('cat-filter-bar').style.display = 'none';
 
@@ -1934,22 +2012,25 @@ async function doSearch(q) {
   navigateTo('cat');
 
   try {
-    const data = await api(`/search?q=${encodeURIComponent(q)}&page=1`);
-    const d = data.data || data;
+    const data   = await api(`/search?q=${encodeURIComponent(q)}&page=1`);
+    const d      = data.data || data;
     const animes = d.animes || [];
-    grid.innerHTML = animes.map(a => animeCard(a)).join('') ||
-      `<p style="color:var(--text-dim);padding:24px">No results for "${escHtml(q)}"</p>`;
+
+    grid.innerHTML = animes.map(a => animeCard(a)).join('')
+      || `<p style="color:var(--text-dim);padding:24px">No results for "${escHtml(q)}"</p>`;
+
     renderPagination(1, d.totalPages || 1, p => doSearch(q));
-    document.getElementById('cat-subtitle').textContent = `${d.totalAnimes || animes.length} results`;
+    document.getElementById('cat-subtitle').textContent =
+      `${d.totalAnimes || animes.length} results`;
+
   } catch (e) {
     toast(`Search failed: ${e.message}`, 'error');
-    grid.innerHTML = '<p style="color:var(--text-dim);padding:24px">Search failed. Please try again.</p>';
+    grid.innerHTML =
+      '<p style="color:var(--text-dim);padding:24px">Search failed. Please try again.</p>';
   }
 }
 
-// ─────────────────────────────────────────────
-// INIT
-// ─────────────────────────────────────────────
+// ─── INIT ─────────────────────────────────────────────────────────────────
 loadHome();
 </script>
 </body>
