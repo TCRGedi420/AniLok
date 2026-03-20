@@ -1661,8 +1661,9 @@ async function loadEpisode(epId, epNum) {
 // ─── SERVERS ──────────────────────────────────────────────────────────────
 // Priority: more reliable servers first, vidsrc last (frequent 500s)
 const SERVER_PRIORITY = [
-  'megacloud','vidstreaming','hd-1','hd-2','vidsrc','streamsb','streamtape'
+  'megacloud','vidstreaming','hd-1','hd-2','streamsb','streamtape','vidsrc'
 ];
+const UNRELIABLE_SERVERS = new Set(['vidsrc']);
 
 function sortByPriority(srvList) {
   return [...srvList].sort((a, b) => {
@@ -1697,24 +1698,37 @@ function renderServerButtons(srvList) {
 
   _currentServerList = sortByPriority(srvList);
 
-  container.innerHTML = _currentServerList.map(s => `
-    <button class="ctrl-btn"
+  container.innerHTML = _currentServerList.map(s => {
+    const unreliable = UNRELIABLE_SERVERS.has(s.serverName.toLowerCase());
+    return `<button class="ctrl-btn"
       id="srv-btn-${s.serverId}"
       onclick="selectServer('${s.serverId}','${escHtml(s.serverName)}',this)"
       data-serverid="${s.serverId}"
       data-servername="${escHtml(s.serverName)}"
-      title="${escHtml(s.serverName)}">${escHtml(s.serverName)}</button>`).join('');
+      title="${unreliable ? s.serverName+' (may be unstable)' : escHtml(s.serverName)}"
+      style="${unreliable ? 'opacity:0.6' : ''}">${escHtml(s.serverName)}${unreliable ? ' ⚠' : ''}</button>`;
+  }).join('');
 
   // Walk the priority list; skip any that return 500
   autoSelectBestServer(0);
 }
 
 async function autoSelectBestServer(startIndex) {
+  // First pass — skip unreliable servers
   for (let i = startIndex; i < _currentServerList.length; i++) {
-    const s   = _currentServerList[i];
+    const s = _currentServerList[i];
+    if (UNRELIABLE_SERVERS.has(s.serverName.toLowerCase())) continue;
     const btn = document.getElementById(`srv-btn-${s.serverId}`);
     const ok  = await selectServer(s.serverId, s.serverName, btn, true);
-    if (ok) return; // stream loaded — stop trying
+    if (ok) return;
+  }
+  // Second pass — try the unreliable ones as last resort
+  for (let i = startIndex; i < _currentServerList.length; i++) {
+    const s = _currentServerList[i];
+    if (!UNRELIABLE_SERVERS.has(s.serverName.toLowerCase())) continue;
+    const btn = document.getElementById(`srv-btn-${s.serverId}`);
+    const ok  = await selectServer(s.serverId, s.serverName, btn, true);
+    if (ok) return;
   }
   showPlayerError('All servers failed. Try a different episode or come back later.');
 }
