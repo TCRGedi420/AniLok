@@ -1635,7 +1635,7 @@ async function loadEpisode(epId, epNum) {
   document.getElementById('server-btns').innerHTML = '';
 
   try {
-    const data = await api(`/episode/servers?animeEpisodeId=${encodeURIComponent(epId)}`);
+    const data = await api(`/episode/servers?animeEpisodeId=${epId}`);
     const servers = data.data || data;
     renderServers(servers);
   } catch (e) {
@@ -1685,7 +1685,7 @@ async function selectServer(serverId, serverName, btn) {
   document.getElementById('player-iframe').style.display = 'none';
 
   try {
-    const data = await api(`/episode/sources?animeEpisodeId=${encodeURIComponent(currentEpId)}&server=${encodeURIComponent(serverName)}&category=${currentVersion}`);
+    const data = await api(`/episode/sources?animeEpisodeId=${currentEpId}&server=${encodeURIComponent(serverName)}&category=${currentVersion}`);
     const src = data.data || data;
     loadStream(src);
   } catch (e) {
