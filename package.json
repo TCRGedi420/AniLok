@@ -1,0 +1,10 @@
+{
+  "name": "anilok",
+  "version": "1.0.0",
+  "description": "AniLok — Anime streaming web app with built-in CORS proxy",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  }
+}
