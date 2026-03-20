@@ -37,9 +37,31 @@ export default async function handler(req, res) {
     return res.status(204).end();
   }
 
-  // 2. Build upstream URL — strip /proxy prefix
-  const tail        = req.url.replace(/^\/proxy/, '') || '/';
-  const upstreamUrl = `${UPSTREAM}${tail}`;
+  // ── 2. Build upstream URL ───────────────────────────────────────────────────
+// The browser sends: /proxy/episode/sources?animeEpisodeId=slug?ep=123&server=x
+// The raw ?ep= inside the animeEpisodeId value corrupts the URL structure.
+// Fix: parse the query string manually, re-encode all values via URLSearchParams
+// so animeEpisodeId=slug?ep=123 becomes animeEpisodeId=slug%3Fep%3D123.
+  const tail     = req.url.replace(/^\/proxy/, '') || '/';
+  const qIdx     = tail.indexOf('?');
+  const pathPart = qIdx === -1 ? tail : tail.slice(0, qIdx);
+  const rawQuery = qIdx === -1 ? ''   : tail.slice(qIdx + 1);
+
+  let finalQuery = '';
+  if (rawQuery) {
+    const params = new URLSearchParams();
+    rawQuery.split('&').forEach(pair => {
+      const eqIdx = pair.indexOf('=');
+      if (eqIdx === -1) return;
+      const key = decodeURIComponent(pair.slice(0, eqIdx));
+      const val = decodeURIComponent(pair.slice(eqIdx + 1));
+      params.set(key, val); // URLSearchParams re-encodes correctly
+    });
+    finalQuery = params.toString();
+  }
+
+  const upstreamUrl = `${UPSTREAM}${pathPart}${finalQuery ? '?' + finalQuery : ''}`;
+  console.log('[AniLok proxy] upstream →', upstreamUrl);
 
   // 3. Forward safe request headers
   const fwdHeaders = { accept: 'application/json' };
