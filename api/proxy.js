@@ -2,59 +2,41 @@
  * AniLok — CORS Proxy  (Vercel Serverless Function)
  * File:  /api/proxy.js
  *
- * Forwards every  GET /proxy/<path>?<qs>  request to the upstream
- * AniWatch API and injects Access-Control-Allow-Origin: * so any
- * browser origin (including file://) can call it freely.
+ * Root cause of ALL "cheerio.load() expects a string" 500 errors:
  *
- * No npm dependencies — uses Node 18 built-in fetch.
+ * The aniwatch scraper's getEpisodeSources() uses a switch statement that
+ * only recognises these server names internally:
+ *   hd-1  (VidStreaming)  → data-server-id = 4
+ *   hd-2  (VidCloud)      → data-server-id = 1
+ *   streamsb              → data-server-id = 5
+ *   streamtape            → data-server-id = 3
  *
- * KEY FIX: We strip `accept-encoding` from the outgoing request so the
- * upstream always returns a plain, uncompressed body.  Node's fetch()
- * decompresses transparently when it manages the encoding itself, but if
- * the browser's `accept-encoding` (gzip / br) is forwarded verbatim the
- * upstream compresses the body, Node passes it through as raw bytes, and
- * the browser then tries to decompress data that is already raw — causing
- * ERR_CONTENT_DECODING_FAILED.  Fix: force `accept-encoding: identity`
- * and strip `content-encoding` from the response so the browser never
- * tries to decompress already-decoded bytes.
+ * But getEpisodeServers() returns DISPLAY names from the new domain
+ * (megacloud, vidsrc, t-cloud…) which don't match the switch —
+ * so serverId stays null, the HTML lookup fails, cheerio gets undefined → 500.
+ *
+ * Fix: expose  GET /proxy/episode/sources/auto  which ignores API-returned
+ * server names and iterates WORKING_SERVERS until one succeeds.
  */
 
 const UPSTREAM = 'https://animelokam.vercel.app/api/v2/hianime';
 
-// ── Headers stripped from the browser request before forwarding ─────────────
+// ONLY names the scraper switch statement understands — order = preference
+const WORKING_SERVERS = ['hd-2', 'hd-1', 'streamsb', 'streamtape'];
+
 const DROP_REQUEST_HEADERS = new Set([
-  'host',
-  'connection',
-  'keep-alive',
-  'proxy-authenticate',
-  'proxy-authorization',
-  'te',
-  'trailers',
-  'transfer-encoding',
-  'upgrade',
-  'origin',
-  'referer',
-  // Critical: never forward compression preferences — force plain text below
-  'accept-encoding',
+  'host', 'connection', 'keep-alive', 'proxy-authenticate',
+  'proxy-authorization', 'te', 'trailers', 'transfer-encoding',
+  'upgrade', 'origin', 'referer', 'accept-encoding',
 ]);
 
-// ── Headers stripped from the upstream response before forwarding ────────────
 const DROP_RESPONSE_HEADERS = new Set([
-  'connection',
-  'keep-alive',
-  'transfer-encoding',
-  'upgrade',
-  // Rewrite CORS headers ourselves
-  'access-control-allow-origin',
-  'access-control-allow-methods',
-  'access-control-allow-headers',
-  'access-control-max-age',
-  // Body is fully decoded by upstream.json() / arrayBuffer() — remove any
-  // content-encoding declaration so the browser doesn't try to decode again
+  'connection', 'keep-alive', 'transfer-encoding', 'upgrade',
+  'access-control-allow-origin', 'access-control-allow-methods',
+  'access-control-allow-headers', 'access-control-max-age',
   'content-encoding',
 ]);
 
-// ── CORS headers added to every response (including preflight) ───────────────
 const CORS = {
   'Access-Control-Allow-Origin':  '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -62,108 +44,112 @@ const CORS = {
   'Access-Control-Max-Age':       '86400',
 };
 
-export default async function handler(req, res) {
+// Builds a safe upstream URL — re-encodes query params via URLSearchParams
+// so animeEpisodeId=slug?ep=123 becomes animeEpisodeId=slug%3Fep%3D123
+function buildUrl(path, extraParams = {}) {
+  const qIdx     = path.indexOf('?');
+  const pathPart = qIdx === -1 ? path : path.slice(0, qIdx);
+  const rawQuery = qIdx === -1 ? ''   : path.slice(qIdx + 1);
 
-  // ── 1. Preflight ────────────────────────────────────────────────────────────
-  if (req.method === 'OPTIONS') {
-    Object.entries(CORS).forEach(([k, v]) => res.setHeader(k, v));
-    return res.status(204).end();
-  }
-
-  // ── 2. Build upstream URL ───────────────────────────────────────────────────
-  // The browser sends: /proxy/episode/sources?animeEpisodeId=slug?ep=123&server=x
-  // The raw ?ep= inside the animeEpisodeId value corrupts the URL structure.
-  // Fix: parse the query string manually, re-encode all values via URLSearchParams
-  // so animeEpisodeId=slug?ep=123 becomes animeEpisodeId=slug%3Fep%3D123.
-  const tail     = req.url.replace(/^\/proxy/, '') || '/';
-  const qIdx     = tail.indexOf('?');
-  const pathPart = qIdx === -1 ? tail : tail.slice(0, qIdx);
-  const rawQuery = qIdx === -1 ? ''   : tail.slice(qIdx + 1);
-
-  let finalQuery = '';
+  const params = new URLSearchParams();
   if (rawQuery) {
-    const params = new URLSearchParams();
     rawQuery.split('&').forEach(pair => {
       const eqIdx = pair.indexOf('=');
       if (eqIdx === -1) return;
-      const key = decodeURIComponent(pair.slice(0, eqIdx));
-      const val = decodeURIComponent(pair.slice(eqIdx + 1));
-      params.set(key, val); // URLSearchParams re-encodes correctly
+      params.set(decodeURIComponent(pair.slice(0, eqIdx)),
+                 decodeURIComponent(pair.slice(eqIdx + 1)));
     });
-    finalQuery = params.toString();
+  }
+  Object.entries(extraParams).forEach(([k, v]) => params.set(k, v));
+  const qs = params.toString();
+  return `${UPSTREAM}${pathPart}${qs ? '?' + qs : ''}`;
+}
+
+async function upstreamFetch(url, headers) {
+  const res  = await fetch(url, { method: 'GET', headers, redirect: 'follow' });
+  const text = await res.text();
+  console.log(`[proxy] ${res.status} ${url.slice(0, 120)}`);
+  let json = null;
+  try { json = JSON.parse(text); } catch {}
+  return { ok: res.status < 500, status: res.status, text, json };
+}
+
+function setCors(res) {
+  Object.entries(CORS).forEach(([k, v]) => res.setHeader(k, v));
+}
+
+export default async function handler(req, res) {
+
+  if (req.method === 'OPTIONS') {
+    setCors(res);
+    return res.status(204).end();
   }
 
-  const upstreamUrl = `${UPSTREAM}${pathPart}${finalQuery ? '?' + finalQuery : ''}`;
-  console.log('[AniLok proxy] upstream →', upstreamUrl);
-
-  // ── 3. Build safe forwarding headers ───────────────────────────────────────
-  const fwdHeaders = { accept: 'application/json' };
+  const fwdHeaders = { accept: 'application/json', 'accept-encoding': 'identity' };
   for (const [k, v] of Object.entries(req.headers)) {
-    if (!DROP_REQUEST_HEADERS.has(k.toLowerCase())) {
-      fwdHeaders[k] = v;
-    }
+    if (!DROP_REQUEST_HEADERS.has(k.toLowerCase())) fwdHeaders[k] = v;
   }
-  // Force no compression so we always get a raw, readable body
-  fwdHeaders['accept-encoding'] = 'identity';
 
-  // ── 4. Read body for non-GET/-HEAD methods ──────────────────────────────────
-  let body;
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    body = await new Promise((resolve, reject) => {
-      const chunks = [];
-      req.on('data',  c  => chunks.push(c));
-      req.on('end',   () => resolve(Buffer.concat(chunks)));
-      req.on('error', reject);
+  const tail = req.url.replace(/^\/proxy/, '') || '/';
+
+  // ── SPECIAL: /episode/sources/auto ──────────────────────────────────────────
+  // Ignores display names from getEpisodeServers() — they break the scraper's
+  // internal switch. Tries WORKING_SERVERS in order, returns first success.
+  if (tail.startsWith('/episode/sources/auto')) {
+    const qs       = tail.includes('?') ? tail.slice(tail.indexOf('?') + 1) : '';
+    const inParams = new URLSearchParams(qs);
+    const epId     = inParams.get('animeEpisodeId') || '';
+    const category = inParams.get('category') || 'sub';
+
+    setCors(res);
+
+    for (const server of WORKING_SERVERS) {
+      const url = buildUrl('/episode/sources', { animeEpisodeId: epId, server, category });
+      console.log(`[proxy] auto → server="${server}" cat="${category}"`);
+
+      let result;
+      try { result = await upstreamFetch(url, fwdHeaders); }
+      catch (err) { console.warn(`[proxy] ${server} fetch error:`, err.message); continue; }
+
+      if (result.ok && result.json) {
+        // Tell the client which server succeeded so it can highlight the button
+        if (result.json.data) result.json.data._resolvedServer = server;
+        return res.status(result.status).json(result.json);
+      }
+      console.warn(`[proxy] ${server} → ${result.status}, trying next`);
+    }
+
+    return res.status(500).json({
+      error:         'all_servers_failed',
+      message:       `None of [${WORKING_SERVERS.join(', ')}] worked for episodeId="${epId}" category="${category}"`,
+      servers_tried: WORKING_SERVERS,
     });
   }
 
-  // ── 5. Hit the upstream ─────────────────────────────────────────────────────
+  // ── NORMAL PROXY — all other /proxy/* routes ─────────────────────────────────
+  const upstreamUrl = buildUrl(tail);
+  console.log('[proxy] →', upstreamUrl);
+
   let upstream;
   try {
     upstream = await fetch(upstreamUrl, {
-      method:   req.method,
-      headers:  fwdHeaders,
-      body,
-      redirect: 'follow',
+      method: req.method, headers: fwdHeaders, redirect: 'follow',
     });
   } catch (err) {
-    Object.entries(CORS).forEach(([k, v]) => res.setHeader(k, v));
-    return res.status(502).json({
-      error:   'upstream_unreachable',
-      message: err.message,
-      url:     upstreamUrl,
-    });
+    setCors(res);
+    return res.status(502).json({ error: 'upstream_unreachable', message: err.message });
   }
 
-  // ── 6. Forward safe response headers ───────────────────────────────────────
+  const text = await upstream.text();
   upstream.headers.forEach((v, k) => {
-    if (!DROP_RESPONSE_HEADERS.has(k.toLowerCase())) {
-      res.setHeader(k, v);
-    }
+    if (!DROP_RESPONSE_HEADERS.has(k.toLowerCase())) res.setHeader(k, v);
   });
-  // Inject our own CORS headers last so they can't be overridden
-  Object.entries(CORS).forEach(([k, v]) => res.setHeader(k, v));
-
-  // ── 7. Return the body ──────────────────────────────────────────────────────
+  setCors(res);
   res.status(upstream.status);
 
-  const contentType = upstream.headers.get('content-type') || '';
-
-  if (contentType.includes('application/json')) {
-    // Parse + re-serialise: guarantees a clean uncompressed JSON body
-    try {
-      const json = await upstream.json();
-      return res.json(json);
-    } catch (e) {
-      return res.status(502).json({
-        error:   'invalid_json',
-        message: 'Upstream returned a non-JSON or malformed body',
-        detail:  e.message,
-      });
-    }
+  const ct = upstream.headers.get('content-type') || '';
+  if (ct.includes('application/json') || text.trimStart().startsWith('{')) {
+    try { return res.json(JSON.parse(text)); } catch {}
   }
-
-  // Any other content type — send raw bytes
-  const buffer = await upstream.arrayBuffer();
-  return res.send(Buffer.from(buffer));
+  return res.send(text);
 }
