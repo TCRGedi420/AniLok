@@ -19,10 +19,12 @@
  * server names and iterates WORKING_SERVERS until one succeeds.
  */
 
-const UPSTREAM = 'https://animelokam.vercel.app/api/v2/hianime';
+import { HiAnime } from 'aniwatch';
+const hianime = new HiAnime.Scraper();
 
-// ONLY names the scraper switch statement understands — order = preference
-const WORKING_SERVERS = ['hd-2', 'hd-1', 'streamsb', 'streamtape'];
+// Now calls aniwatchtv.to directly, no middleman
+const data = await hianime.getHomePage();
+const data = await hianime.getEpisodeSources(epId, 'hd-2', 'sub');
 
 const DROP_REQUEST_HEADERS = new Set([
   'host', 'connection', 'keep-alive', 'proxy-authenticate',
