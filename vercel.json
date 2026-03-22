@@ -1,17 +1,23 @@
 {
-  "version": 2,
-  "routes": [
-    {
-      "src": "/proxy/(.*)",
-      "dest": "/api/proxy.js"
-    },
-    {
-      "handle": "filesystem"
-    },
-    {
-      "src": "/(.*)",
-      "dest": "/public/index.html"
-    }
-  ]
-  "installCommand": "npm install"
+"version": 2,
+"routes": [
+{
+"src": "/proxy/(.*)",
+"dest": "/api/proxy.js"
+},
+{
+"handle": "filesystem"
+},
+{
+"src": "/(.*)",
+"dest": "/public/index.html"
+}
+],
+"builds": [
+{
+"src": "api/proxy.js",
+"use": "@vercel/node"
+}
+],
+"installCommand": "npm install"
 }
