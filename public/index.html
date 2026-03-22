@@ -1798,6 +1798,53 @@ async function manualSelectServer(index, btn) {
 function retryStream() {
   loadAuto();
 }
+
+function loadStream(src) {
+  const iframe  = document.getElementById('player-iframe');
+  const loading = document.getElementById('player-loading');
+
+  const embedUrl = src.iframe || src.embedUrl || src.url;
+  const hlsUrl   = src.sources?.[0]?.url || src.link;
+
+  if (embedUrl) {
+    iframe.src    = embedUrl;
+    iframe.onload = () => { loading.style.display = 'none'; iframe.style.display = 'block'; };
+    iframe.onerror = () => {
+      if (hlsUrl) tryHLS(hlsUrl);
+      else showPlayerError('Failed to load stream. Try another server.');
+    };
+    setTimeout(() => {
+      if (loading.style.display !== 'none') {
+        loading.style.display = 'none';
+        iframe.style.display  = 'block';
+      }
+    }, 4000);
+  } else if (hlsUrl) {
+    tryHLS(hlsUrl);
+  } else {
+    showPlayerError('No stream source available. Try another server.');
+  }
+
+  if (src.sources?.length > 1) {
+    document.getElementById('quality-group').style.display = 'flex';
+    document.getElementById('quality-select').innerHTML =
+      src.sources.map(s => `<option value="${s.url}">${s.quality || 'Auto'}</option>`).join('');
+  }
+}
+
+function tryHLS(url) {
+  const iframe  = document.getElementById('player-iframe');
+  const loading = document.getElementById('player-loading');
+  const proxy   = `${CORS_PROXY}${encodeURIComponent(url)}`;
+  iframe.src = `data:text/html,<video src="${url}" controls autoplay
+    style="width:100%;height:100%;background:#000"
+    onerror="document.location='${proxy}'"></video>`;
+  loading.style.display = 'none';
+  iframe.style.display  = 'block';
+}
+
+function setQuality(url) { tryHLS(url); }
+  
 function setVersion(v) {
   currentVersion = v;
   document.getElementById('btn-sub').classList.toggle('active',        v === 'sub');
