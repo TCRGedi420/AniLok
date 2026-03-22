@@ -1,16 +1,16 @@
 {
-  "name": "anilok",
-  "version": "1.0.0",
-  "description": "AniLok — Anime streaming web app with built-in CORS proxy",
-  "type": "module",
-  "license": "MIT",
-  "engines": {
-    "node": ">=18"
-  }
-  "dependencies": {
-  "aniwatch": "^1.0.0"
-  },
-  "scripts": {
-    "postinstall": "node scripts/patch-aniwatch.js"
-  }
+"name": "anilok",
+"version": "1.0.0",
+"description": "AniLok — Anime streaming web app with built-in CORS proxy",
+"type": "module",
+"license": "MIT",
+"engines": {
+"node": ">=18"
+},
+"dependencies": {
+"aniwatch": "^1.0.0"
+},
+"scripts": {
+"postinstall": "node scripts/patch-aniwatch.js"
+}
 }
