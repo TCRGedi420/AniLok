@@ -1724,26 +1724,11 @@ function renderServers(servers) {
   renderServerButtons(list);
 }
 
-// Priority order — servers listed first are tried first.
-// megacloud & vidstreaming tend to be more reliable than vidsrc.
-const SERVER_PRIORITY = [
-  'megacloud','vidstreaming','hd-1','hd-2','streamsb','streamtape','vidsrc'
-];
-
-// Servers known to 500 frequently — skipped in auto-fallback first pass
-// but still available for manual click
-const UNRELIABLE_SERVERS = new Set(['vidsrc']);
-
-function sortByPriority(srvList) {
-  return [...srvList].sort((a, b) => {
-    const ai = SERVER_PRIORITY.indexOf(a.serverName.toLowerCase());
-    const bi = SERVER_PRIORITY.indexOf(b.serverName.toLowerCase());
-    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
-  });
-}
-
-// Stores the current version's full server list so auto-fallback can walk it
-let _currentServerList = [];
+// ─── SERVERS ──────────────────────────────────────────────────────────────────
+// The aniwatch scraper switch ONLY understands: hd-1, hd-2, streamsb, streamtape.
+// Display names from getEpisodeServers() (megacloud, vidsrc…) are useless —
+// the proxy /episode/sources/auto endpoint iterates the working names internally.
+const WORKING_SERVERS_DISPLAY = ['hd-2 (VidCloud)', 'hd-1 (VidStreaming)', 'StreamSB', 'StreamTape'];
 
 function renderServerButtons(srvList) {
   const container = document.getElementById('server-btns');
@@ -1752,55 +1737,45 @@ function renderServerButtons(srvList) {
     showPlayerError('No servers available for this version.');
     return;
   }
+  container.innerHTML = WORKING_SERVERS_DISPLAY.map((name, i) => `
+    <button class="ctrl-btn ${i === 0 ? 'active' : ''}"
+      id="srv-display-${i}"
+      onclick="manualSelectServer(${i}, this)"
+      title="${name}">${name}</button>`).join('');
 
-  _currentServerList = sortByPriority(srvList);
-
-  container.innerHTML = _currentServerList.map(s => {
-    const unstable = UNRELIABLE_SERVERS.has(s.serverName.toLowerCase());
-    return `<button class="ctrl-btn" id="srv-btn-${s.serverId}"
-      onclick="selectServer('${s.serverId}','${escHtml(s.serverName)}',this)"
-      data-serverid="${s.serverId}"
-      data-servername="${escHtml(s.serverName)}"
-      title="${unstable ? s.serverName+' (may be unstable)' : escHtml(s.serverName)}"
-      style="${unstable ? 'opacity:0.6' : ''}"
-      >${escHtml(s.serverName)}${unstable ? ' ⚠' : ''}</button>`;
-  }).join('');
-
-  // Auto-load starting from the highest-priority server
-  autoSelectBestServer(0);
+  loadAuto();
 }
 
-async function autoSelectBestServer(startIndex) {
-  // First pass — skip unreliable servers
-  for (let i = startIndex; i < _currentServerList.length; i++) {
-    const s = _currentServerList[i];
-    if (UNRELIABLE_SERVERS.has(s.serverName.toLowerCase())) continue;
-    const btn = document.getElementById(`srv-btn-${s.serverId}`);
-    const ok  = await selectServer(s.serverId, s.serverName, btn, true);
-    if (ok) return;
+async function loadAuto() {
+  document.getElementById('player-loading').style.display = 'flex';
+  document.getElementById('player-error').style.display   = 'none';
+  document.getElementById('player-iframe').style.display  = 'none';
+
+  try {
+    const data = await api(
+      `/episode/sources/auto?animeEpisodeId=${currentEpId}&category=${currentVersion}`
+    );
+    const src = data.data || data;
+    if (src._resolvedServer) {
+      const map = { 'hd-2': 0, 'hd-1': 1, 'streamsb': 2, 'streamtape': 3 };
+      const idx = map[src._resolvedServer] ?? 0;
+      document.querySelectorAll('#server-btns .ctrl-btn')
+              .forEach((b, i) => b.classList.toggle('active', i === idx));
+    }
+    loadStream(src);
+  } catch (e) {
+    console.error('[AniLok] all servers failed:', e.message);
+    showPlayerError('All servers failed for this episode. Try a different episode.');
+    toast('All servers failed — ' + e.message.slice(0, 80), 'error');
   }
-  // Second pass — try unreliable ones as last resort
-  for (let i = startIndex; i < _currentServerList.length; i++) {
-    const s = _currentServerList[i];
-    if (!UNRELIABLE_SERVERS.has(s.serverName.toLowerCase())) continue;
-    const btn = document.getElementById(`srv-btn-${s.serverId}`);
-    const ok  = await selectServer(s.serverId, s.serverName, btn, true);
-    if (ok) return;
-  }
-  showPlayerError('All servers failed for this episode. Try a different episode or come back later.');
 }
 
-async function selectServer(serverId, serverName, btn, _autoFallback = false) {
-  // Mark button states
-  document.querySelectorAll('#server-btns .ctrl-btn').forEach(b => {
-    b.classList.remove('active');
-    b.style.opacity = '1';
-  });
-  if (btn && typeof btn === 'object' && btn.classList) {
-    btn.classList.add('active');
-    btn.textContent = `${serverName} ⟳`;
-  }
-  currentServer = serverId;
+async function manualSelectServer(index, btn) {
+  const serverMap = { 0: 'hd-2', 1: 'hd-1', 2: 'streamsb', 3: 'streamtape' };
+  const server = serverMap[index] ?? 'hd-2';
+
+  document.querySelectorAll('#server-btns .ctrl-btn').forEach(b => b.classList.remove('active'));
+  if (btn) { btn.classList.add('active'); btn.textContent = btn.textContent.replace(' ⟳','') + ' ⟳'; }
 
   document.getElementById('player-loading').style.display = 'flex';
   document.getElementById('player-error').style.display   = 'none';
@@ -1808,108 +1783,21 @@ async function selectServer(serverId, serverName, btn, _autoFallback = false) {
 
   try {
     const data = await api(
-      `/episode/sources?animeEpisodeId=${currentEpId}` +
-      `&server=${encodeURIComponent(serverName)}&category=${currentVersion}`
+      `/episode/sources?animeEpisodeId=${currentEpId}&server=${server}&category=${currentVersion}`
     );
     const src = data.data || data;
-
-    // Mark button as good
-    if (btn && typeof btn === 'object') btn.textContent = serverName;
-
+    if (btn) btn.textContent = btn.textContent.replace(' ⟳', '');
     loadStream(src);
-    return true; // success
-
   } catch (e) {
-    // Mark button as failed
-    if (btn && typeof btn === 'object') {
-      btn.textContent = `${serverName} ✕`;
-      btn.style.opacity = '0.45';
-      btn.classList.remove('active');
-    }
-
-    const is500 = e.message.includes('500') || e.message.includes('cheerio');
-    if (_autoFallback && is500) {
-      // Silently move to next server — don't toast yet
-      console.warn(`[AniLok] ${serverName} → 500, trying next server`);
-      return false; // signal caller to try next
-    }
-
-    toast(`${serverName} failed — ${e.message.slice(0, 80)}`, 'error');
-    showPlayerError(`"${serverName}" failed. Try another server.`);
-    return false;
+    if (btn) { btn.textContent = btn.textContent.replace(' ⟳','') + ' ✕'; btn.style.opacity = '0.5'; }
+    toast(`${server} failed — ${e.message.slice(0, 80)}`, 'error');
+    showPlayerError('Server failed. Try another.');
   }
-}
-
-
-function loadStream(src) {
-  const iframe = document.getElementById('player-iframe');
-  const loading = document.getElementById('player-loading');
-  const errorEl = document.getElementById('player-error');
-
-  // Try iframe embed URL first
-  const embedUrl = src.iframe || src.embedUrl || src.url;
-  const hlsUrl = src.sources?.[0]?.url || src.link;
-
-  if (embedUrl) {
-    iframe.src = embedUrl;
-    iframe.onload = () => {
-      loading.style.display = 'none';
-      iframe.style.display = 'block';
-    };
-    iframe.onerror = () => {
-      // Try CORS proxy for HLS
-      if (hlsUrl) tryHLS(hlsUrl);
-      else showPlayerError('Failed to load stream. Try another server.');
-    };
-    // Timeout fallback
-    setTimeout(() => {
-      if (loading.style.display !== 'none') {
-        loading.style.display = 'none';
-        iframe.style.display = 'block';
-      }
-    }, 4000);
-  } else if (hlsUrl) {
-    tryHLS(hlsUrl);
-  } else {
-    showPlayerError('No stream source available. Try another server.');
-  }
-
-  // Quality
-  if (src.sources?.length > 1) {
-    const qg = document.getElementById('quality-group');
-    const qs = document.getElementById('quality-select');
-    qg.style.display = 'flex';
-    qs.innerHTML = src.sources.map(s => `<option value="${s.url}">${s.quality||'Auto'}</option>`).join('');
-  }
-}
-
-function tryHLS(url) {
-  // Attempt direct load; if CORS fails, use proxy
-  const iframe = document.getElementById('player-iframe');
-  const loading = document.getElementById('player-loading');
-
-  const proxyUrl = `${CORS_PROXY}${encodeURIComponent(url)}`;
-  iframe.src = `data:text/html,<video src="${url}" controls autoplay style="width:100%;height:100%;background:#000" onerror="document.location='${proxyUrl}'"></video>`;
-  loading.style.display = 'none';
-  iframe.style.display = 'block';
-}
-
-function setQuality(url) {
-  tryHLS(url);
 }
 
 function retryStream() {
-  // Find the index after the last active/tried server and continue from there
-  const activeName = document.querySelector('#server-btns .ctrl-btn.active')?.dataset?.servername;
-  const idx = _currentServerList.findIndex(s => s.serverName === activeName);
-  const nextIdx = idx === -1 ? 0 : idx + 1;
-  if (nextIdx < _currentServerList.length) {
-    autoSelectBestServer(nextIdx);
-  } else {
-    toast('No more servers to try.', 'error');
-  }
+  loadAuto();
 }
-
 function setVersion(v) {
   currentVersion = v;
   document.getElementById('btn-sub').classList.toggle('active',        v === 'sub');
