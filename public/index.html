@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>AniLok — Stream Anime</title>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@latest/dist/hls.min.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;500;600;700;800;900&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 <style>
@@ -1674,6 +1675,10 @@ async function loadEpisode(epId, epNum) {
   const epEl = document.getElementById(`ep-${safeId}`);
   if (epEl) { epEl.classList.add('active'); epEl.scrollIntoView({ behavior:'smooth', block:'nearest' }); }
 
+  // Clean up previous HLS instance and video element
+  if (window._hlsInstance) { window._hlsInstance.destroy(); window._hlsInstance = null; }
+  const oldVideo = document.getElementById('player-video');
+  if (oldVideo) oldVideo.remove();
   document.getElementById('player-loading').style.display = 'flex';
   document.getElementById('player-error').style.display = 'none';
   document.getElementById('player-iframe').style.display = 'none';
@@ -1802,48 +1807,134 @@ function retryStream() {
 function loadStream(src) {
   const iframe  = document.getElementById('player-iframe');
   const loading = document.getElementById('player-loading');
+  const errorEl = document.getElementById('player-error');
 
-  const embedUrl = src.iframe || src.embedUrl || src.url;
-  const hlsUrl   = src.sources?.[0]?.url || src.link;
+  // Hide old player
+  iframe.style.display = 'none';
+  iframe.src = '';
+  loading.style.display = 'flex';
+  errorEl.style.display = 'none';
 
+  // Remove any previous native video element
+  const oldVideo = document.getElementById('player-video');
+  if (oldVideo) oldVideo.remove();
+
+  // Extract stream data from response
+  const hlsUrl   = src.sources?.[0]?.url || src.url || src.link;
+  const embedUrl = src.iframe || src.embedUrl;
+  const referer  = src.headers?.Referer || '';
+  const isM3U8   = src.sources?.[0]?.isM3U8 || hlsUrl?.includes('.m3u8');
+
+  // Populate quality selector
+  if (src.sources?.length > 1) {
+    document.getElementById('quality-group').style.display = 'flex';
+    document.getElementById('quality-select').innerHTML =
+      src.sources.map(s => `<option value="${s.url}">${s.quality || 'Auto'}</option>`).join('');
+  } else {
+    document.getElementById('quality-group').style.display = 'none';
+  }
+
+  // If we have a direct HLS url — use HLS.js (works in all browsers)
+  if (hlsUrl && isM3U8) {
+    playHLS(hlsUrl, src);
+    return;
+  }
+
+  // Fallback: iframe embed (e.g. if server returns an embed page URL)
   if (embedUrl) {
     iframe.src    = embedUrl;
     iframe.onload = () => { loading.style.display = 'none'; iframe.style.display = 'block'; };
-    iframe.onerror = () => {
-      if (hlsUrl) tryHLS(hlsUrl);
-      else showPlayerError('Failed to load stream. Try another server.');
-    };
+    iframe.onerror = () => showPlayerError('Embed failed. Try another server.');
     setTimeout(() => {
       if (loading.style.display !== 'none') {
         loading.style.display = 'none';
         iframe.style.display  = 'block';
       }
-    }, 4000);
-  } else if (hlsUrl) {
-    tryHLS(hlsUrl);
-  } else {
-    showPlayerError('No stream source available. Try another server.');
+    }, 5000);
+    return;
   }
 
-  if (src.sources?.length > 1) {
-    document.getElementById('quality-group').style.display = 'flex';
-    document.getElementById('quality-select').innerHTML =
-      src.sources.map(s => `<option value="${s.url}">${s.quality || 'Auto'}</option>`).join('');
+  showPlayerError('No playable stream found. Try another server.');
+}
+
+function playHLS(url, src) {
+  const container = document.getElementById('player-container');
+  const loading   = document.getElementById('player-loading');
+  const errorEl   = document.getElementById('player-error');
+
+  // Build a native <video> element inside the player container
+  const video = document.createElement('video');
+  video.id       = 'player-video';
+  video.controls = true;
+  video.autoplay = true;
+  video.style.cssText = 'width:100%;height:100%;background:#000;display:block;';
+  container.appendChild(video);
+
+  // Add subtitles if available
+  if (src.subtitles?.length) {
+    src.subtitles.forEach((sub, i) => {
+      const track = document.createElement('track');
+      track.kind    = 'subtitles';
+      track.label   = sub.lang || `Sub ${i+1}`;
+      track.srclang = sub.lang?.slice(0, 2).toLowerCase() || 'en';
+      track.src     = sub.url;
+      if (sub.default) track.default = true;
+      video.appendChild(track);
+    });
   }
+
+  if (Hls.isSupported()) {
+    const hls = new Hls({
+      xhrSetup: (xhr) => {
+        // Some streams require a Referer header
+        // (browser XHR can't set Referer directly, but we try)
+        xhr.withCredentials = false;
+      }
+    });
+    hls.loadSource(url);
+    hls.attachMedia(video);
+    hls.on(Hls.Events.MANIFEST_PARSED, () => {
+      loading.style.display = 'none';
+      video.play().catch(() => {});
+    });
+    hls.on(Hls.Events.ERROR, (event, data) => {
+      if (data.fatal) {
+        console.error('[AniLok] HLS fatal error:', data.type, data.details);
+        hls.destroy();
+        video.remove();
+        showPlayerError(`Stream error: ${data.details}. Try another server.`);
+      }
+    });
+    // Store hls instance so we can destroy on next load
+    window._hlsInstance = hls;
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    // Native HLS support (Safari / iOS)
+    video.src = url;
+    video.addEventListener('loadedmetadata', () => {
+      loading.style.display = 'none';
+      video.play().catch(() => {});
+    });
+  } else {
+    video.remove();
+    showPlayerError('HLS playback not supported in this browser.');
+  }
+}
+
+function setQuality(url) {
+  // Destroy existing HLS instance before switching quality
+  if (window._hlsInstance) {
+    window._hlsInstance.destroy();
+    window._hlsInstance = null;
+  }
+  const oldVideo = document.getElementById('player-video');
+  if (oldVideo) oldVideo.remove();
+  playHLS(url, {});
 }
 
 function tryHLS(url) {
-  const iframe  = document.getElementById('player-iframe');
-  const loading = document.getElementById('player-loading');
-  const proxy   = `${CORS_PROXY}${encodeURIComponent(url)}`;
-  iframe.src = `data:text/html,<video src="${url}" controls autoplay
-    style="width:100%;height:100%;background:#000"
-    onerror="document.location='${proxy}'"></video>`;
-  loading.style.display = 'none';
-  iframe.style.display  = 'block';
+  // Legacy fallback — just use playHLS now
+  playHLS(url, {});
 }
-
-function setQuality(url) { tryHLS(url); }
   
 function setVersion(v) {
   currentVersion = v;
